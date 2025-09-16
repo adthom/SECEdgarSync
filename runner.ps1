@@ -13,6 +13,9 @@ SUPPORT IS NOT PROVIDED, NOT IMPLIED, NOR WILL BE GIVEN FOR THIS CODE.
     AZURE_TENANT_ID     # For auth using the App Registration for managing the Connector in Graph API
     AZURE_CLIENT_ID     # For auth using the App Registration for managing the Connector in Graph API
     AZURE_CLIENT_SECRET # For auth using the App Registration for managing the Connector in Graph API
+
+
+    Requires the MSAL.PS module for authentication to Graph API
 #>
 
 $ProcessingPath = $PSScriptRoot
@@ -415,6 +418,270 @@ for ($f = 0; $f -lt $def.Count; $f++) {
     }
 }
 
+$sgml_pattern = [regex]::new('\n+((?!\n)\s)*(?=<PAGE>)', [Text.RegularExpressions.RegexOptions]'IgnoreCase,ExplicitCapture,Compiled')
+$hr_pattern = [regex]::new('(?<=\n\s*\-{3,})\s*\n',[Text.RegularExpressions.RegexOptions]'IgnoreCase,ExplicitCapture,Compiled')
+$forward_link_pattern = [regex]::new('\n(?=(?<link>(#+ )?\[[^\]]+?\]\((?!http)[^\)]+?\)))',[Text.RegularExpressions.RegexOptions]'IgnoreCase,ExplicitCapture,Compiled')
+$xbrl_pattern = [regex]::new('(?=\[-\ Definition]\(javascript:void\(0\);\))',[Text.RegularExpressions.RegexOptions]'IgnoreCase,ExplicitCapture,Compiled')
+$lengthPattern = [regex]::new('<[^>]+?>',[Text.RegularExpressions.RegexOptions]'Compiled,ExplicitCapture')
+$cleanLength = [Func[string, int]]{return $lengthPattern.Replace($args[0], [string]::Empty).Length}
+
+function Get-PagePattern {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory,Position=0,ValueFromPipeline)]
+        [string]
+        $string
+    )
+
+    if ($sgml_pattern.IsMatch($string)) {
+        # If the SGML pattern matches, we use it
+        Write-Verbose "SGML Pattern"
+        return $sgml_pattern
+    }
+
+    if ($xbrl_pattern.IsMatch($string)) {
+        # If the XBRL pattern matches, we use it
+        Write-Verbose "XBRL Pattern"
+        return $xbrl_pattern
+    }
+
+    $pagePattern = [regex]::new(@'
+(?<=\n)                         # Match a newline at the start of the line
+((?!\n)\s)*                     # Match any whitespace that is not a newline
+(
+     (?<page>                        # Page Number
+                                    # ARABIC NUMBERS
+        (\b[A-Z][ -]?)?               # Optional prefix of a capital letter followed by an optional space or hyphen
+        \d{1,3}                     # Match 1 to 3 digits
+
+        |                           # OR
+
+                                    # ROMAN NUMERALS
+        (?=\b[MCDXLVI]+\b)          # Lookahead to ensure length of match is at least 1 character
+            \b                      # Word boundary to ensure we match whole Roman numeral
+                M{0,3}              # Match 0 to 3 'M's (1000s)
+                (CM|CD|D?C{0,3})    # Match 'CM' (900), 'CD' (400), or 0 to 3 'C's (100s)
+                (XC|XL|L?X{0,3})    # Match 'XC' (90), 'XL' (40), or 0 to 3 'X's (10s)
+                (IX|IV|V?I{0,3})    # Match 'IX' (9), 'IV' (4), or 0 to 3 'I's (1s)
+            \b                      # Word boundary to ensure we match whole Roman numeral
+    )
+
+    ((?!\n)\s)*                 # Match any whitespace that is not a newline
+
+    (?<line>[^\n]*?)            # Match any characters that are not a newline, capturing the line content 
+                                #  (to identify if we have a common line format)
+                                # lazy match to avoid consuming leading whitespace
+|
+    (?<line>[^\n]*?)            # Match any characters that are not a newline, capturing the line content 
+                                #  (to identify if we have a common line format)
+                                # lazy match to avoid consuming trailing whitespace
+
+    ((?!\n)\s)*                 # Match any whitespace that is not a newline
+
+    (?<page>                        # Page Number
+                                    # ARABIC NUMBERS
+        (\b[A-Z][ -]?)?               # Optional prefix of a capital letter followed by an optional space or hyphen
+        \d{1,3}                     # Match 1 to 3 digits
+
+        |                           # OR
+
+                                    # ROMAN NUMERALS
+        (?=\b[MCDXLVI]+\b)          # Lookahead to ensure length of match is at least 1 character
+            \b                      # Word boundary to ensure we match whole Roman numeral
+                M{0,3}              # Match 0 to 3 'M's (1000s)
+                (CM|CD|D?C{0,3})    # Match 'CM' (900), 'CD' (400), or 0 to 3 'C's (100s)
+                (XC|XL|L?X{0,3})    # Match 'XC' (90), 'XL' (40), or 0 to 3 'X's (10s)
+                (IX|IV|V?I{0,3})    # Match 'IX' (9), 'IV' (4), or 0 to 3 'I's (1s)
+            \b                      # Word boundary to ensure we match whole Roman numeral
+    )
+|
+    (?<linestart>(?!<\w[^>]*?>)[^\n]+?)            # Match any characters that are not a newline, capturing the line content 
+                                #  (to identify if we have a common line format)
+                                # lazy match to avoid consuming leading whitespace
+
+    ((?!\n)\s)*                 # Match any whitespace that is not a newline
+
+    (?<page>                        # Page Number
+                                    # ARABIC NUMBERS
+        (\b[A-Z][ -]?)?               # Optional prefix of a capital letter followed by an optional space or hyphen
+        \d{1,3}                     # Match 1 to 3 digits
+
+        |                           # OR
+
+                                    # ROMAN NUMERALS
+        (?=\b[MCDXLVI]+\b)          # Lookahead to ensure length of match is at least 1 character
+            \b                      # Word boundary to ensure we match whole Roman numeral
+                M{0,3}              # Match 0 to 3 'M's (1000s)
+                (CM|CD|D?C{0,3})    # Match 'CM' (900), 'CD' (400), or 0 to 3 'C's (100s)
+                (XC|XL|L?X{0,3})    # Match 'XC' (90), 'XL' (40), or 0 to 3 'X's (10s)
+                (IX|IV|V?I{0,3})    # Match 'IX' (9), 'IV' (4), or 0 to 3 'I's (1s)
+            \b                      # Word boundary to ensure we match whole Roman numeral
+    )
+
+    ((?!\n)\s)*                 # Match any whitespace that is not a newline
+
+    (?<lineend>(?!<\w[^>]*?>)[^\n]+?)         # Match any characters that are not a newline, capturing the line content 
+                                #  (to identify if we have a common line format)
+                                # lazy match to avoid consuming leading whitespace
+)
+((?!\n)\s)*                     # Match any whitespace that is not a newline
+(?=\n|$)                          # Ensure the match is followed by a newline
+'@,
+        [Text.RegularExpressions.RegexOptions]'Compiled,ExplicitCapture,IgnoreCase,IgnorePatternWhitespace')
+
+    $pageLineMatches = @($pagePattern.Matches($string) | Group-Object { if ($_.Groups['linestart'].Success) { $_.Groups['linestart'].Value + '##PAGENUM##' + $_.Groups['lineend'].Value } else { $_.Groups['line'].Value }} | Where-Object { $_.Count -gt 1 -and $_.Name -notmatch '<[^>]+>>' } | Sort-Object Count -Descending)
+
+    function RomanToInt {
+        param(
+            [string]
+            $roman
+        )
+        $values = [Collections.Generic.Dictionary[char, int]]@{}
+        $values['I'] = 1
+        $values['i'] = 1
+        $values['V'] = 5
+        $values['v'] = 5
+        $values['X'] = 10
+        $values['x'] = 10
+        $values['L'] = 50
+        $values['l'] = 50
+        $values['C'] = 100
+        $values['c'] = 100
+        $values['D'] = 500
+        $values['d'] = 500
+        $values['M'] = 1000
+        $values['m'] = 1000
+
+        $total = 0
+        for ($i = 0; $i -lt $roman.Length; $i++) {
+            $c = $roman[$i]
+            $current = 0
+            if (!$values.TryGetValue($c, [ref] $current)) {
+                Write-Warning "Invalid Roman character '${c}'."
+                return -1
+            }
+            # Look ahead: if next symbol is larger, subtract current; otherwise add
+            $next = 0
+            if (($i + 1) -lt $roman.Length -and $values.TryGetValue($roman[($i + 1)], [ref] $next) -and $next -gt $current) {
+                $total -= $current
+            }
+            else {
+                $total += $current
+            }
+        }
+
+        return $total
+    }
+
+    $numbers = [regex]::new('((?<prefix>[A-Z][ -]?)?(?<arabic>\d{1,3})|(?<roman>[MCDXLVI]+))', [Text.RegularExpressions.RegexOptions]'Compiled,ExplicitCapture,IgnoreCase,IgnorePatternWhitespace')
+
+    $pageline = $null
+    $line_pattern = [regex]::new('^$') # will give no matches
+    for ($i = 0; $i -lt $pageLineMatches.Count; $i++) {
+        $line = $pageLineMatches[$i].Name
+        $pageNumbers = @($pageLineMatches[$i].Group | ForEach-Object { $_.Groups['page'].Value })
+        # validate that page numbers are ascending (and reset if we switch from Roman to Arabic or between Prefixes)
+        if ($pageNumbers.Count -eq 0) {
+            Write-Verbose "No page numbers found!"
+            break
+        }
+        $lastformat = $null
+        $lastprefix = $null
+        $last = $null
+        $lastvalue = -1
+        $valid = $true
+        $numinvalid = 0
+        $invalidthreshhold = [int]($pageNumbers.Count / 20)
+        for ($j = 0; $j -lt $pageNumbers.Count; $j++) {
+            $current = $pageNumbers[$j]
+            $formatMatch = $numbers.Match($current)
+            if (!$formatMatch.Success) {
+                Write-Verbose "Invalid page number format: '$current' @ $j"
+                $valid = $false
+                break
+            }
+            $currentFormat = $formatMatch.Groups['arabic'].Success ? 'Arabic' : $formatMatch.Groups['roman'].Success ? 'Roman' : 'Unknown'
+            if ($currentFormat -eq 'Unknown') {
+                Write-Verbose "Unknown page number format: '$($pageNumbers[$j])' @ $j"
+                $valid = $false
+                break
+            }
+            $currentPrefix = $formatMatch.Groups['prefix'].Value
+            $currentValue = $currentFormat -eq 'Arabic' ? [int]$formatMatch.Groups['arabic'].Value : (RomanToInt $formatMatch.Groups['roman'].Value)
+            if ($currentValue -eq -1) {
+                Write-Verbose "Invalid Page in page numbers: $current"
+                $valid = $false
+                break
+            }
+
+            if ($j -gt 0) {
+                # check if the current page number is greater than the prior
+                if ($lastValue -ge $currentValue -and $currentFormat -eq $lastformat -and $currentPrefix -eq $lastprefix) {
+                    $numinvalid++
+                    Write-Verbose "Page number $current is not sequentially after $last @ $j ($numinvalid/$invalidthreshhold)"
+                    if ($numinvalid -gt $invalidthreshhold) {
+                        Write-Verbose "Too many invalid page numbers: $numinvalid > $invalidthreshhold"
+                        $valid = $false
+                        break
+                    }
+                }
+            }
+            
+            $lastformat = $currentFormat
+            $lastprefix = $currentPrefix
+            $last = $current
+            $lastvalue = $currentValue
+        }
+        if ($valid) {
+            if ($pageLineMatches[$i].Group[0].Groups['linestart'].Success) {
+                $start = $pageLineMatches[$i].Group[0].Groups['linestart'].Value
+                $end = $pageLineMatches[$i].Group[0].Groups['lineend'].Value
+                $splitpattern = '(?<=\n((?!\n)\s)*{0}((?!\n)\s)*((\b[A-Z][-]?)?\d{{1,3}}|(?=\b[MCDXLVI]+\b)\bM{0,3}(CM|CD|D?C{{0,3}})(XC|XL|L?X{{0,3}})(IX|IV|V?I{{0,3}})\b)((?!\n)\s)*{1})((?!\n)\s)*\n' -f [Regex]::Escape($start), [Regex]::Escape($end)
+            }
+            else {   
+                $pageline = $line
+                $splitpattern = '(?<=\n((?!\n)\s)*(((\b[A-Z][ -]?)?\d{{1,3}}|(?=\b[MCDXLVI]+\b)\bM{{0,3}}(CM|CD|D?C{{0,3}})(XC|XL|L?X{{0,3}})(IX|IV|V?I{{0,3}})\b)((?!\n)\s)*{0}|{0}((?!\n)\s)*((\b[A-Z][ -]?)?\d{{1,3}}|(?=\b[MCDXLVI]+\b)\bM{{0,3}}(CM|CD|D?C{{0,3}})(XC|XL|L?X{{0,3}})(IX|IV|V?I{{0,3}})\b))((?!\n)\s)*)\n+' -f [Regex]::Escape($pageline)
+            }
+            $line_pattern = [regex]::new($splitpattern, [Text.RegularExpressions.RegexOptions]'Compiled,ExplicitCapture,IgnoreCase')
+            if ($pageLineMatches[$i].Count -gt ([int]($cleanLength.Invoke($string) / 5000))) {
+                return $line_pattern
+            }
+            break
+        }
+    }
+    # Write-Verbose "No valid page line found!"
+    $page_patterns=@(
+        $line_pattern,
+        $hr_pattern,
+        $forward_link_pattern
+    )
+    $pattern = ($page_patterns | Sort-Object {$_.Split($string).Count} -Descending -Top 1)
+    if ($pattern -eq $line_pattern) {
+        Write-Verbose "Line Pattern"
+        return $pattern
+    }
+    if ($pattern -eq $hr_pattern) {
+        Write-Verbose "Horizontal Rule Pattern"
+        return $pattern
+    }
+    # Get the most common match from the matching links
+    $pattern = $pattern.Matches($string) | Group-Object { $_.Groups['link'].Value } | Sort-Object Count -Descending | Select-Object -First 1 | ForEach-Object {
+        [regex]::new(('(?<=\n)' + [Regex]::Escape($_.Name)), [Text.RegularExpressions.RegexOptions]'Compiled,ExplicitCapture,IgnoreCase')
+    }
+
+    $pattern = (@($line_pattern,$hr_pattern,$pattern) | Sort-Object {$_.Split($string).Count} -Descending -Top 1)
+    if ($pattern -eq $line_pattern) {
+        Write-Verbose "Line Pattern"
+        return $pattern
+    }
+    if ($pattern -eq $hr_pattern) {
+        Write-Verbose "Horizontal Rule Pattern"
+        return $pattern
+    }
+
+    Write-Verbose "Forward Link Pattern $pattern"
+    return $pattern
+}
 
 $ids = [Collections.Generic.HashSet[string]][string[]]@(Get-Content ./processed_ids.txt -ErrorAction SilentlyContinue)
 $docs = [Collections.Generic.HashSet[string]]@()
